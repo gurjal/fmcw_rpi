@@ -26,8 +26,9 @@ public:
   rpi_daq(int hz, int periods, int steps, int tune = 0);
   ~rpi_daq();
   void run_daq();
-  void run_fft();
-  void write_plot_data(int n);
+  void run_1d_fft();
+  void run_2d_fft();
+  void write_plot_data(int n, int _p = 1);
 
 private:
   int _hz;
@@ -41,22 +42,34 @@ private:
   char _read_data[SPI_LEN]     = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
   
   // FFTW data structures
-  fftw_complex ** _ch_A_raw;
-  fftw_complex ** _ch_B_raw;
-  fftw_complex ** _ch_A_fft;
-  fftw_complex ** _ch_B_fft;
-  fftw_plan    * _ch_A_plan;
-  fftw_plan    * _ch_B_plan;
+  fftw_complex ** _ch_A_raw_1;
+  fftw_complex ** _ch_B_raw_1;
+  fftw_complex ** _ch_A_fft_1;
+  fftw_complex ** _ch_B_fft_1;
+  fftw_plan    * _ch_A_plan_1;
+  fftw_plan    * _ch_B_plan_1;
+  fftw_complex ** _ch_A_raw_2;
+  fftw_complex ** _ch_B_raw_2;
+  fftw_complex ** _ch_A_fft_2;
+  fftw_complex ** _ch_B_fft_2;
+  fftw_plan    * _ch_A_plan_2;
+  fftw_plan    * _ch_B_plan_2;
 };
 
 rpi_daq::rpi_daq(int hz, int periods, int steps, int tune)
   : _hz(hz), _steps(steps), _periods(periods), _tune(tune),
-    _ch_A_raw(new fftw_complex * [periods]),
-    _ch_B_raw(new fftw_complex * [periods]),
-    _ch_A_fft(new fftw_complex * [periods]),
-    _ch_B_fft(new fftw_complex * [periods]),
-    _ch_A_plan(new fftw_plan[periods]),
-    _ch_B_plan(new fftw_plan[periods])
+    _ch_A_raw_1(new fftw_complex * [periods]),
+    _ch_B_raw_1(new fftw_complex * [periods]),
+    _ch_A_fft_1(new fftw_complex * [periods]),
+    _ch_B_fft_1(new fftw_complex * [periods]),
+    _ch_A_plan_1(new fftw_plan[periods]),
+    _ch_B_plan_1(new fftw_plan[periods]),
+    _ch_A_raw_2(new fftw_complex * [steps]),
+    _ch_B_raw_2(new fftw_complex * [steps]),
+    _ch_A_fft_2(new fftw_complex * [steps]),
+    _ch_B_fft_2(new fftw_complex * [steps]),
+    _ch_A_plan_2(new fftw_plan[steps]),
+    _ch_B_plan_2(new fftw_plan[steps])
 {
   if (!bcm2835_init()) {
     printf("bcm2835_init failed\n");
@@ -84,34 +97,58 @@ rpi_daq::rpi_daq(int hz, int periods, int steps, int tune)
 
   // allocating space to fftw vars
   for (int p = 0; p < _periods; p++) {
-    _ch_A_raw[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _steps);
-    _ch_B_raw[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _steps);
-    _ch_A_fft[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _steps);
-    _ch_B_fft[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _steps);
+    _ch_A_raw_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _steps);
+    _ch_A_fft_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _steps);
+    _ch_B_raw_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _steps);
+    _ch_B_fft_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _steps);
   }
 
   for (int p = 0; p < _periods; p++) {
-    _ch_A_plan[p] = fftw_plan_dft_1d(_steps, (fftw_complex*)_ch_A_raw[p],
-        (fftw_complex*)_ch_A_fft[p], FFTW_FORWARD, FFTW_ESTIMATE);
-    _ch_B_plan[p] = fftw_plan_dft_1d(_steps, (fftw_complex*)_ch_B_raw[p],
-        (fftw_complex*)_ch_B_fft[p], FFTW_FORWARD, FFTW_ESTIMATE);
+    _ch_A_plan_1[p] = fftw_plan_dft_1d(_steps,
+        (fftw_complex*)_ch_A_raw_1[p], (fftw_complex*)_ch_A_fft_1[p],
+        FFTW_FORWARD, FFTW_ESTIMATE);
+    _ch_B_plan_1[p] = fftw_plan_dft_1d(_steps,
+        (fftw_complex*)_ch_B_raw_1[p], (fftw_complex*)_ch_B_fft_1[p],
+        FFTW_FORWARD, FFTW_ESTIMATE);
+  }
+
+  for (int s = 0; s < _steps; s++) {
+    _ch_A_raw_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _periods);
+    _ch_A_fft_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _periods);
+    _ch_B_raw_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _periods);
+    _ch_B_fft_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _periods);
+  }
+
+  for (int s = 0; s < _steps; s++) {
+    _ch_A_plan_2[s] = fftw_plan_dft_1d(_periods,
+        (fftw_complex*)_ch_A_raw_2[s], (fftw_complex*)_ch_A_fft_2[s],
+        FFTW_FORWARD, FFTW_ESTIMATE);
+    _ch_B_plan_2[s] = fftw_plan_dft_1d(_periods,
+        (fftw_complex*)_ch_B_raw_2[s], (fftw_complex*)_ch_B_fft_2[s],
+        FFTW_FORWARD, FFTW_ESTIMATE);
   }
 }
     
 rpi_daq::~rpi_daq()
 {
-  delete [] _ch_A_raw;
-  delete [] _ch_B_raw;
-  delete [] _ch_A_fft;
-  delete [] _ch_B_fft;
-  delete [] _ch_A_plan;
-  delete [] _ch_B_plan;
+  delete [] _ch_A_raw_1;
+  delete [] _ch_B_raw_1;
+  delete [] _ch_A_fft_1;
+  delete [] _ch_B_fft_1;
+  delete [] _ch_A_plan_1;
+  delete [] _ch_B_plan_1;
+  delete [] _ch_A_raw_2;
+  delete [] _ch_B_raw_2;
+  delete [] _ch_A_fft_2;
+  delete [] _ch_B_fft_2;
+  delete [] _ch_A_plan_2;
+  delete [] _ch_B_plan_2;
 }
 
 // Write and read DAQ for number of PERIODS
 //
-void rpi_daq::run_daq() {
-
+void rpi_daq::run_daq()
+{
   static const int step_delay((1000000 / _steps / _hz) - _tune);
   static const uint16_t step_incr(0xFFFF / _steps);
   static uint16_t cur_mag(0);
@@ -137,8 +174,12 @@ void rpi_daq::run_daq() {
           // trade softspan data for read data on ADC
       bcm2835_spi_transfernb((char*)_softSpan_data, (char*)_read_data, (int)SPI_LEN);
           // convert raw data to voltage value
-      _ch_A_raw[p][s][REAL] = (double)((0xFFFF - ((_read_data[0] << 8) | (_read_data[1]))) * (5.0f/65536.0f));
-      _ch_B_raw[p][s][REAL] = (double)((0xFFFF - ((_read_data[3] << 8) | (_read_data[4]))) * (5.0f/65536.0f));
+      _ch_A_raw_1[p][s][REAL] = (double)((0xFFFF\
+          - ((_read_data[0] << 8) | (_read_data[1])))\
+          * (5.0f/65536.0f));
+      _ch_B_raw_1[p][s][REAL] = (double)((0xFFFF\
+          - ((_read_data[3] << 8) | (_read_data[4])))\
+          * (5.0f/65536.0f));
       
         // increment DAC magnitude
       cur_mag += step_incr;
@@ -157,42 +198,77 @@ void rpi_daq::run_daq() {
 
 }
 
-// Run fft on each period individually
+// Run 1d fft over whole dataset
 //
-void rpi_daq::run_fft() {
+void rpi_daq::run_1d_fft()
+{
   for (int p = 0; p < _periods; p++) {
-    fftw_execute(_ch_A_plan[p]);
-    fftw_execute(_ch_B_plan[p]);
+    fftw_execute(_ch_A_plan_1[p]);
+    fftw_execute(_ch_B_plan_1[p]);
+  }
+}
+
+// Run 2d fft over whole dataset
+//
+void rpi_daq::run_2d_fft()
+{
+  for (int p = 0; p < _periods; p++) {
+    fftw_execute(_ch_A_plan_1[p]);
+    fftw_execute(_ch_B_plan_1[p]);
+  }
+
+  for (int p = 0; p < _periods; p++) {
+    for (int s = 0; s < _steps; s++) {
+      _ch_A_raw_2[s][p][REAL] = _ch_A_fft_1[p][s][REAL];
+      _ch_A_raw_2[s][p][IMAG] = _ch_A_fft_1[p][s][IMAG];
+    }
+  }
+
+  for (int s = 0; s < _steps; s++) {
+    fftw_execute(_ch_A_plan_2[s]);
+    fftw_execute(_ch_B_plan_2[s]);
   }
 }
 
 // Write data to file to be plotted by Gnuplot
 // Args:
 //  0 -> raw adc data
-//  1 -> fft on raw adc data
+//  1 -> 1d fft data
+//  2 -> 2d fft data
 //
-void rpi_daq::write_plot_data(int n) {
-
-  int intr(1);
-  std::ofstream f("data.dat");
+void rpi_daq::write_plot_data(int n, int _p)
+{
+  int intr(0);
+  static FILE* gp = popen("gnuplot", "w");
 
   switch(n)
   {
     case 0:
-      for (int p = 0; p < _periods; p++)
+      fprintf(gp,"plot [0:%d][0:6] '-' w lines\n", _p*_steps);
+      for (int p = 0; p < _p; p++)
         for (int s = 0; s < _steps; s++, intr++)
-          f << intr << "\t"
-            << _ch_A_raw[p][s][REAL] << "\t"
-            << _ch_B_raw[p][s][REAL] << "\n"; 
-      f.close();
+          fprintf(gp,"%d %lf \n", intr, _ch_A_raw_1[p][s][REAL]);
+      fprintf(gp,"e\n");
+      fflush(gp);
       break;
 
     case 1:
-      for (int s = 0; s < _steps; s++, intr++)
-        f << intr << "\t"
-          << _ch_A_fft[1][s][REAL] << "\t"
-          << _ch_B_fft[1][s][REAL] << "\n"; 
-      f.close();
+      fprintf(gp,"plot '-' w lines\n");
+      for (int p = 0; p < _p; p++)
+        for (int s = 0; s < _steps; s++, intr++)
+          fprintf(gp,"%d %lf \n", intr,
+              mag(_ch_A_fft_1[p][s][REAL], _ch_A_fft_1[p][s][IMAG]));
+      fprintf(gp,"e\n");
+      fflush(gp);
       break;
+
+    //case 2:
+      //for (int s = 0; s < _p; s++)
+      //  for (int p = 0; p < _periods; p++, intr++)
+      //    f << intr << "\t"
+      //      << mag(_ch_A_fft_2[s][p][REAL], _ch_A_fft_2[s][p][IMAG]) << "\n";
+      //      //<< mag(_ch_B_fft_2[s][p][REAL], _ch_A_fft_2[s][p][IMAG]) << "\n"; 
+      //f.close();
+      //break;
   }
 }
