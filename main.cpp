@@ -8,31 +8,36 @@
 #include <unistd.h>
 #include <sched.h>
 
+#define SPI_LEN 6
+
 #define REAL 0
 #define IMAG 1
 
-#define SPI_LEN 6
+// configs
+#define _HZ 16
+#define _STEPS 128
+#define _ZERO_PAD 64
+#define _PERIODS 16
+#define _TUNE 0
 
-#define HZ 16
-#define STEPS 128
-#define PERIODS 16
-#define TUNE 0
-
+int _ZERO_PAD_STEPS = _ZERO_PAD + _STEPS;
 char _softSpan_data[SPI_LEN] = { 0x00, 0x90, 0x00, 0x00, 0x00, 0x00 };
 char _send_data[SPI_LEN]     = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 char _read_data[SPI_LEN]     = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-fftw_complex**  _ch_A_raw_1(new fftw_complex* [PERIODS]);
-fftw_complex**  _ch_B_raw_1(new fftw_complex* [PERIODS]);
-fftw_complex**  _ch_A_fft_1(new fftw_complex* [PERIODS]);
-fftw_complex**  _ch_B_fft_1(new fftw_complex* [PERIODS]);
-fftw_plan*      _ch_A_plan_1(new fftw_plan[PERIODS]);
-fftw_plan*      _ch_B_plan_1(new fftw_plan[PERIODS]);
-fftw_complex**  _ch_A_raw_2(new fftw_complex* [STEPS]);
-fftw_complex**  _ch_B_raw_2(new fftw_complex* [STEPS]);
-fftw_complex**  _ch_A_fft_2(new fftw_complex* [STEPS]);
-fftw_complex**  _ch_B_fft_2(new fftw_complex* [STEPS]);
-fftw_plan*      _ch_A_plan_2(new fftw_plan[STEPS]);
-fftw_plan*      _ch_B_plan_2(new fftw_plan[STEPS]);
+double _dc_offset[_PERIODS];
+double _fft_calibration[_PERIODS][_ZERO_PAD_STEPS];
+fftw_complex**  _ch_A_raw_1(new fftw_complex* [_PERIODS]);
+fftw_complex**  _ch_B_raw_1(new fftw_complex* [_PERIODS]);
+fftw_complex**  _ch_A_fft_1(new fftw_complex* [_PERIODS]);
+fftw_complex**  _ch_B_fft_1(new fftw_complex* [_PERIODS]);
+fftw_plan*      _ch_A_plan_1(new fftw_plan[_PERIODS]);
+fftw_plan*      _ch_B_plan_1(new fftw_plan[_PERIODS]);
+fftw_complex**  _ch_A_raw_2(new fftw_complex* [_STEPS]);
+fftw_complex**  _ch_B_raw_2(new fftw_complex* [_STEPS]);
+fftw_complex**  _ch_A_fft_2(new fftw_complex* [_STEPS]);
+fftw_complex**  _ch_B_fft_2(new fftw_complex* [_STEPS]);
+fftw_plan*      _ch_A_plan_2(new fftw_plan[_STEPS]);
+fftw_plan*      _ch_B_plan_2(new fftw_plan[_STEPS]);
 
 inline double mag(double real, double imag)
 {
@@ -46,31 +51,25 @@ inline double ang(double real, double imag)
 
 void run_init();
 void run_daq();
+void calibrate_fft(int periods);
 void run_1d_fft();
 void run_2d_fft();
-void write_plot_data(int n, int _p = 1);
+void plot_data(int n);
 
 int main()
 {
-  static const struct sched_param priority = {1};
-  sched_setscheduler(0, SCHED_FIFO, &priority);
-
   run_init();
+  for (int i = 0; i < 16*1; i++) {
   // control
-  for (int i = 0; i < 16*100; i++) {
-  //while(1) {
-  //  if (std::cin.get() == 'q')
-  //    break;
-
     run_daq();
-    write_plot_data(0,16);
+    run_1d_fft();
+    plot_data(1);
     //std::thread t_daq(run_daq);
-    //std::thread t_plot(write_plot_data, 0, 1);
+    //std::thread t_plot(plot_data, 0, 1);
     //t_plot.join();
     //t_daq.join();
 
   }
-
   return 0;
 }
 
@@ -101,34 +100,34 @@ void run_init()
   bcm2835_aux_spi_setClockDivider(BCM2835_SPI_CLOCK_DIVIDER_128);
 
   // allocating space to fftw vars
-  for (int p = 0; p < PERIODS; p++) {
-    _ch_A_raw_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * STEPS);
-    _ch_A_fft_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * STEPS);
-    _ch_B_raw_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * STEPS);
-    _ch_B_fft_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * STEPS);
+  for (int p = 0; p < _PERIODS; p++) {
+    _ch_A_raw_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _ZERO_PAD_STEPS);
+    _ch_A_fft_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _ZERO_PAD_STEPS);
+    _ch_B_raw_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _STEPS);
+    _ch_B_fft_1[p] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _STEPS);
   }
 
-  for (int p = 0; p < PERIODS; p++) {
-    _ch_A_plan_1[p] = fftw_plan_dft_1d(STEPS,
+  for (int p = 0; p < _PERIODS; p++) {
+    _ch_A_plan_1[p] = fftw_plan_dft_1d(_ZERO_PAD_STEPS,
         (fftw_complex*)_ch_A_raw_1[p], (fftw_complex*)_ch_A_fft_1[p],
         FFTW_FORWARD, FFTW_ESTIMATE);
-    _ch_B_plan_1[p] = fftw_plan_dft_1d(STEPS,
+    _ch_B_plan_1[p] = fftw_plan_dft_1d(_STEPS,
         (fftw_complex*)_ch_B_raw_1[p], (fftw_complex*)_ch_B_fft_1[p],
         FFTW_FORWARD, FFTW_ESTIMATE);
   }
 
-  for (int s = 0; s < STEPS; s++) {
-    _ch_A_raw_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * PERIODS);
-    _ch_A_fft_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * PERIODS);
-    _ch_B_raw_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * PERIODS);
-    _ch_B_fft_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * PERIODS);
+  for (int s = 0; s < _STEPS; s++) {
+    _ch_A_raw_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _PERIODS);
+    _ch_A_fft_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _PERIODS);
+    _ch_B_raw_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _PERIODS);
+    _ch_B_fft_2[s] = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * _PERIODS);
   }
 
-  for (int s = 0; s < STEPS; s++) {
-    _ch_A_plan_2[s] = fftw_plan_dft_1d(PERIODS,
+  for (int s = 0; s < _STEPS; s++) {
+    _ch_A_plan_2[s] = fftw_plan_dft_1d(_PERIODS,
         (fftw_complex*)_ch_A_raw_2[s], (fftw_complex*)_ch_A_fft_2[s],
         FFTW_FORWARD, FFTW_ESTIMATE);
-    _ch_B_plan_2[s] = fftw_plan_dft_1d(PERIODS,
+    _ch_B_plan_2[s] = fftw_plan_dft_1d(_PERIODS,
         (fftw_complex*)_ch_B_raw_2[s], (fftw_complex*)_ch_B_fft_2[s],
         FFTW_FORWARD, FFTW_ESTIMATE);
   }
@@ -136,13 +135,16 @@ void run_init()
 
 void run_daq()
 {
+  static const struct sched_param priority = {1};
+  sched_setscheduler(0, SCHED_FIFO, &priority);
 
-  static const int step_delay((1000000 / STEPS / HZ) - TUNE);
-  static const uint16_t step_incr(0xFFFF / STEPS);
+  static const int step_delay((1000000 / _STEPS / _HZ) - _TUNE);
+  static const uint16_t step_incr(0xFFFF / _STEPS);
   static uint16_t cur_mag(0);
 
-  for (int p=0; p<PERIODS; p++, cur_mag=0) {
-    for (int s=0; s<STEPS; s++) {
+  for (int p=0; p<_PERIODS; p++, cur_mag=0) {
+    _dc_offset[p] = 0;
+    for (int s=0; s<_STEPS; s++) {
       
       /* DAC OUTPUT WRITE */
         // write current magnitude to dac output
@@ -168,6 +170,7 @@ void run_daq()
       _ch_B_raw_1[p][s][REAL] = (double)((0xFFFF\
           - ((_read_data[3] << 8) | (_read_data[4])))\
           * (5.0f/65536.0f));
+      _dc_offset[p] += _ch_A_raw_1[p][s][REAL];
       
         // increment DAC magnitude
       cur_mag += step_incr;
@@ -180,17 +183,30 @@ void run_daq()
       //    );
 
     }
+    _dc_offset[p] = _dc_offset[p]/_STEPS;
+    //printf("%lf\n", _dc_offset[p]);
   }
-
+  
   bcm2835_aux_spi_write(0);
 
+}
+
+void calibrate_fft(int periods)
+{
 }
 
 // Run 1d fft over whole dataset
 //
 void run_1d_fft()
 {
-  for (int p = 0; p < PERIODS; p++) {
+  for (int p = 0; p < _PERIODS; p++) {
+    for (int s = 0; s < _STEPS; s++)
+      _ch_A_raw_1[p][s][REAL] = _ch_A_raw_1[p][s][REAL] - _dc_offset[p];
+    for (int s = _STEPS; s < _ZERO_PAD_STEPS; s++)
+      _ch_A_raw_1[p][s][REAL] = 0;
+  }
+
+  for (int p = 0; p < _PERIODS; p++) {
     fftw_execute(_ch_A_plan_1[p]);
     fftw_execute(_ch_B_plan_1[p]);
   }
@@ -200,19 +216,19 @@ void run_1d_fft()
 //
 void run_2d_fft()
 {
-  for (int p = 0; p < PERIODS; p++) {
+  for (int p = 0; p < _PERIODS; p++) {
     fftw_execute(_ch_A_plan_1[p]);
     fftw_execute(_ch_B_plan_1[p]);
   }
 
-  for (int p = 0; p < PERIODS; p++) {
-    for (int s = 0; s < STEPS; s++) {
+  for (int p = 0; p < _PERIODS; p++) {
+    for (int s = 0; s < _STEPS; s++) {
       _ch_A_raw_2[s][p][REAL] = _ch_A_fft_1[p][s][REAL];
       _ch_A_raw_2[s][p][IMAG] = _ch_A_fft_1[p][s][IMAG];
     }
   }
 
-  for (int s = 0; s < STEPS; s++) {
+  for (int s = 0; s < _STEPS; s++) {
     fftw_execute(_ch_A_plan_2[s]);
     fftw_execute(_ch_B_plan_2[s]);
   }
@@ -224,7 +240,7 @@ void run_2d_fft()
 //  1 -> 1d fft data
 //  2 -> 2d fft data
 //
-void write_plot_data(int n, int _p)
+void plot_data(int n)
 {
   int intr(0);
   static FILE* gp = popen("gnuplot", "w");
@@ -232,20 +248,20 @@ void write_plot_data(int n, int _p)
   switch(n)
   {
     case 0:
-      fprintf(gp,"plot [0:%d][0:6] '-' w lines\n", _p*STEPS);
-      for (int p = 0; p < _p; p++)
-        for (int s = 0; s < STEPS; s++, intr++)
+      fprintf(gp,"plot [0:%d][0:6] '-' w lines\n", _STEPS);
+      for (int p = 0; p < _PERIODS; p++)
+        for (int s = 0; s < _STEPS; s++, intr++)
           fprintf(gp,"%d %lf \n", intr, _ch_A_raw_1[p][s][REAL]);
       fprintf(gp,"e\n");
       fflush(gp);
       break;
 
     case 1:
-      fprintf(gp,"plot '-' w lines\n");
-      for (int p = 0; p < _p; p++)
-        for (int s = 0; s < STEPS; s++, intr++)
+      fprintf(gp,"plot [0:%d] '-' w lines\n", _ZERO_PAD_STEPS/2);
+      //for (int p = 0; p < _p; p++)
+        for (int s = 0; s < _ZERO_PAD_STEPS/2; s++, intr++)
           fprintf(gp,"%d %lf \n", intr,
-              mag(_ch_A_fft_1[p][s][REAL], _ch_A_fft_1[p][s][IMAG]));
+              mag(_ch_A_fft_1[1][s][REAL], _ch_A_fft_1[1][s][IMAG]));
       fprintf(gp,"e\n");
       fflush(gp);
       break;
