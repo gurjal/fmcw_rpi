@@ -1,2 +1,2 @@
 #! /bin/sh
-make clean out && sudo ./out
+make clean run && sudo ./run
