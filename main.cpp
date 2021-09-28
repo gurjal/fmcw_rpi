@@ -14,7 +14,7 @@
 
 #if CHANNELS==1
 #define SPI_LEN 3
-static char _softspan_data[SPI_LEN] = { 0x00, 0x80, 0x00 };
+static char _softspan_data[SPI_LEN] = { 0x00, 0x10, 0x00 };
 static char _send_data[SPI_LEN] = { 0x00, 0x00, 0x00 };
 static char _read_data[SPI_LEN] = { 0x00, 0x00, 0x00 };
 #elif CHANNELS==2
